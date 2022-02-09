@@ -1,5 +1,5 @@
 # tbd
-✏ A highly customizable and distributed online whiteboard app 
+✏️ A highly customizable and distributed online whiteboard app 
 
 ## Goals
 
