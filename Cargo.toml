@@ -1,0 +1,8 @@
+[package]
+edition = "2021"
+name = "sheeter"
+version = "0.1.0"
+
+[dependencies]
+rustfft = "*"
+wav = "*"
