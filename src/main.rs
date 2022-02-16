@@ -4,43 +4,82 @@ use poloto::prelude::*;
 use rustfft::{num_complex::Complex, FftPlanner};
 
 fn main() -> Result<(), Error> {
-    let wav_filepath = env::args().nth(1).unwrap();
+    let wav_filepath = env::args()
+        .nth(1)
+        .expect("first argument should be path to a .wav file");
+
     let mut wav_file = File::open(Path::new(&wav_filepath))?;
+
     let (header, data) = wav::read(&mut wav_file)?;
 
-    println!("{header:#?}");
+    let channel_count = header.channel_count as usize;
+    let chunk_size = 4000 as usize;
+    let start_time = (5.0 * header.sampling_rate as f64) as usize;
 
-    let fft = FftPlanner::new().plan_fft_forward(header.sampling_rate as usize);
+    eprintln!("{header:#?}");
+
+    let fft = FftPlanner::new().plan_fft_forward(chunk_size);
 
     if header.bits_per_sample == 16 {
-        let data_reader = data.try_into_sixteen().unwrap();
+        // reusable iterator that will be for consecutive reads
+        let data_reader = data.try_into_sixteen().unwrap().into_iter();
+        eprintln!("wav_data_length: {}", data_reader.len());
 
-        // reading the data for a single channel and performing FFT on it
-        let mut buffer: Vec<Complex<i16>> = data_reader[..header.sampling_rate as usize]
-            .into_iter()
-            .map(Complex::from)
+        // reading the data for a single channel at a time and performing FFT on it
+        let mut channel_buffers: Vec<Vec<_>> = (0..channel_count)
+            .map(|channel| {
+                data_reader
+                    .clone()
+                    .skip(start_time + channel)
+                    .step_by(channel_count)
+                    .take(chunk_size)
+                    // Map smaller range integers to i64 to avoid overflows
+                    .map(|num| num as i64)
+                    // turn the numbers into Complex form for fft library
+                    .map(Complex::from)
+                    .collect::<Vec<Complex<i64>>>()
+            })
             .collect();
 
-        fft.process(&mut buffer);
+        eprintln!("buffer collection");
 
-        println!("process graph");
-        let mut data = poloto::data();
-        data.line(
-            "Hz",
-            buffer
+        for (channel, buffer) in &mut channel_buffers.iter_mut().enumerate() {
+            fft.process(buffer);
+
+            for (i, a) in buffer
                 .iter()
                 // ignore the symmetric portion on the left
                 .skip(buffer.len() / 2)
                 // ignore the 0Hz DC signal
                 .skip(1)
                 .enumerate()
-                .map(|(i, n)| [i as f64, n.re.abs() as f64]),
-        );
+            {
+                if a.re.abs() > 2000 {
+                    eprintln!("{:#?}", i);
+                }
+            }
 
-        let mut plotter = data.build().plot("pitches", "x", "y");
-        println!("{}", poloto::disp(|a| plotter.simple_theme(a)));
+            eprintln!("graph rendering");
+
+            // Graph Generation Portion
+            let mut data = poloto::data();
+            data.line(
+                "Hz",
+                buffer
+                    .iter()
+                    // ignore the symmetric portion on the left
+                    .skip(buffer.len() / 2)
+                    // ignore the 0Hz DC signal
+                    .skip(1)
+                    .enumerate()
+                    .map(|(i, n)| [i as f64, n.re.abs() as f64]),
+            );
+
+            let mut plotter = data.build().plot(format!("chanel {}", channel), "x", "y");
+            println!("{}", poloto::disp(|a| plotter.simple_theme(a)));
+        }
     } else {
-        println!("was not matching bit size");
+        eprintln!("was not matching bit size");
     }
 
     Ok(())
