@@ -8,13 +8,25 @@ fn main() -> Result<(), Error> {
         .nth(1)
         .expect("first argument should be path to a .wav file");
 
+    let start_time: f64 = env::args()
+        .nth(2)
+        .expect("second argument should be start time")
+        .parse()
+        .expect("expected a number");
+
+    let duration: f64 = env::args()
+        .nth(3)
+        .expect("third argument should be a duration")
+        .parse()
+        .expect("expected a number");
+
     let mut wav_file = File::open(Path::new(&wav_filepath))?;
 
     let (header, data) = wav::read(&mut wav_file)?;
 
+    let start_time = (start_time * header.sampling_rate as f64) as usize;
+    let chunk_size = (duration * header.sampling_rate as f64) as usize;
     let channel_count = header.channel_count as usize;
-    let chunk_size = 4000 as usize;
-    let start_time = (5.0 * header.sampling_rate as f64) as usize;
 
     eprintln!("{header:#?}");
 
@@ -54,7 +66,7 @@ fn main() -> Result<(), Error> {
                 .skip(1)
                 .enumerate()
             {
-                if a.re.abs() > 2000 {
+                if a.re.abs() > chunk_size as i64 / 4 {
                     eprintln!("{:#?}", i);
                 }
             }
