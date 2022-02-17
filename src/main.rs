@@ -55,6 +55,9 @@ fn main() -> Result<(), Error> {
 
         eprintln!("buffer collection");
 
+        // Graph Generation Portion
+        let mut data = poloto::data();
+
         for (channel, buffer) in &mut channel_buffers.iter_mut().enumerate() {
             fft.process(buffer);
 
@@ -72,11 +75,8 @@ fn main() -> Result<(), Error> {
             }
 
             eprintln!("graph rendering");
-
-            // Graph Generation Portion
-            let mut data = poloto::data();
             data.line(
-                "Hz",
+                format!("Channel {}", channel),
                 buffer
                     .iter()
                     // ignore the symmetric portion on the left
@@ -86,10 +86,10 @@ fn main() -> Result<(), Error> {
                     .enumerate()
                     .map(|(i, n)| [i as f64, n.re.abs() as f64]),
             );
-
-            let mut plotter = data.build().plot(format!("chanel {}", channel), "x", "y");
-            println!("{}", poloto::disp(|a| plotter.simple_theme(a)));
         }
+
+        let mut plotter = data.build().plot("Channels", "x", "y");
+        println!("{}", poloto::disp(|a| plotter.simple_theme(a)));
     } else {
         eprintln!("was not matching bit size");
     }
