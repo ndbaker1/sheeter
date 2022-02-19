@@ -1,28 +1,29 @@
-use std::{env, fs::File, io::Error, path::Path, vec};
+use std::{fs::File, io::Error, path::Path, vec};
 
+use clap::Parser;
 use pix::{hwb::SHwb8, Raster};
 use rustfft::{num_complex::Complex, FftPlanner};
 
+#[derive(Parser, Debug)]
+struct ProgramArgs {
+    /// the path to the WAV file to process
+    wav_filepath: String,
+    /// number of seconds to convert into frames
+    /// based on the sampling_rate of the file
+    #[clap(long, default_value_t = 0.2)]
+    chunk_size_in_seconds: f64,
+    /// amount of overlap to inlude with other chunk frames
+    #[clap(long, default_value_t = 0.2)]
+    chunk_overlap: f64,
+}
+// // TODO - max the normalization global, maybe by doing a second pass algorithm
+// // allow user to specify chunk overlap & a target interval
+
 fn main() -> Result<(), Error> {
-    let wav_filepath = env::args()
-        .nth(1)
-        .expect("first argument should be path to a .wav file");
+    let args = ProgramArgs::parse();
+    println!("{args:#?}");
 
-    let chunk_size_in_seconds: f64 = env::args()
-        .nth(2)
-        .expect("second argument should be a duration")
-        .parse()
-        .expect("expected a number");
-
-    // TODO - max the normalization global, maybe by doing a second pass algorithm
-    // allow user to specify chunk overlap & a target interval
-    let chunk_overlap: f64 = env::args()
-        .nth(3)
-        .expect("third argument should be a duration")
-        .parse()
-        .expect("expected a number");
-
-    let mut wav_file = File::open(Path::new(&wav_filepath))?;
+    let mut wav_file = File::open(Path::new(&args.wav_filepath))?;
 
     let (header, data) = wav::read(&mut wav_file)?;
 
@@ -57,7 +58,7 @@ fn main() -> Result<(), Error> {
 
     eprintln!("wav_data_length: {}", data_reader.len());
 
-    let chunk_size = (chunk_size_in_seconds * header.sampling_rate as f64) as usize;
+    let chunk_size = (args.chunk_size_in_seconds * header.sampling_rate as f64) as usize;
     let chunk_count = data_reader.len() / chunk_size;
     let channel_count = header.channel_count as usize;
 
@@ -73,7 +74,7 @@ fn main() -> Result<(), Error> {
         // of the Fast Fourier Transform
         let halved = chunk_size / 2;
         // we are gonna cut out some of the higher ranges that we dont want
-        halved / 25
+        halved / 10
     };
 
     let mut map_data = vec![vec![0_f64; height]; width];
