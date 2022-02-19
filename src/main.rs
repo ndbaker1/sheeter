@@ -30,7 +30,7 @@ fn main() -> Result<(), Error> {
     println!("{args:#?}");
 
     let signal_amplifier: fn(f64) -> f64 = match true {
-        true => |n| (8_f64 * n).powi(3),
+        true => |n| (8_f64 * n).powi(2),
         false => |n| n,
     };
 
@@ -143,9 +143,8 @@ fn main() -> Result<(), Error> {
         for (y, value) in row.iter().enumerate() {
             // normalize the Complex FFT value and use it for the color
             //
-            // NOTE! normalization is order for the chunks covered
-            // during the tranformations, this means that processing
-            // the whole file yield as difference normalization ratio
+            // NOTE! normalization is only applied/computed for the chunks covered during the tranformations,
+            // this means that processing different portions withh yield different normalization ratios
             let normalized = value / global_max;
             let scale = (u8::MAX as f64 * signal_amplifier(normalized)).min(u8::MAX as f64) as u8;
             // update the pixel value
