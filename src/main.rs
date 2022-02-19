@@ -24,20 +24,6 @@ fn main() -> Result<(), Error> {
 
     let (header, data) = wav::read(&mut wav_file)?;
 
-    let chunk_size = (chunk_size_in_seconds * header.sampling_rate as f64) as usize;
-    let chunk_count = header.sampling_rate as usize / chunk_size;
-    let channel_count = header.channel_count as usize;
-
-    eprintln!("chunk_size: {chunk_size}");
-    eprintln!("{header:#?}");
-
-    let fft = FftPlanner::new().plan_fft_forward(chunk_size);
-
-    let width = chunk_count;
-    let height = chunk_size / 2;
-
-    let mut raster = Raster::with_clear(width as u32, height as u32);
-
     // reusable iterator that will be for consecutive reads
     let data_reader: Vec<f64> = match header.bits_per_sample {
         8 => data
@@ -67,19 +53,35 @@ fn main() -> Result<(), Error> {
         _ => return Ok(eprintln!("was not matching bit size")),
     };
 
+    let chunk_size = (chunk_size_in_seconds * header.sampling_rate as f64) as usize;
+    let chunk_count = data_reader.len() / chunk_size;
+    let channel_count = header.channel_count as usize;
+
+    eprintln!("chunk_size: {chunk_size}");
+    eprintln!("{header:#?}");
+
+    let fft = FftPlanner::new().plan_fft_forward(chunk_size);
+
+    let width = chunk_count;
+    let height = chunk_size / 2;
+
+    let mut raster = Raster::with_clear(width as u32, height as u32);
+
     eprintln!("wav_data_length: {}", data_reader.len());
 
     for chunk in 0..chunk_count {
         // reading the data for a single channel at a time and performing FFT on it
         let mut channel_buffers: Vec<Vec<_>> = (0..channel_count)
             .map(|channel| {
-                data_reader[channel + chunk * chunk_size..]
+                let mut mapped: Vec<Complex<f64>> = data_reader[channel + chunk * chunk_size..]
                     .iter()
                     .step_by(channel_count)
                     .take(chunk_size)
                     // turn the numbers into Complex form for fft library
                     .map(Complex::from)
-                    .collect()
+                    .collect();
+                mapped.resize(chunk_size, Complex::from(0_f64));
+                mapped
             })
             .collect();
 
