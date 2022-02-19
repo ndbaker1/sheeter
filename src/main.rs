@@ -53,8 +53,6 @@ fn main() -> Result<(), Error> {
             })
             .collect();
 
-        eprintln!("buffer collection");
-
         // Graph Generation Portion
         let mut data = poloto::data();
 
@@ -75,6 +73,7 @@ fn main() -> Result<(), Error> {
             }
 
             eprintln!("graph rendering");
+
             data.line(
                 format!("Channel {}", channel),
                 buffer
