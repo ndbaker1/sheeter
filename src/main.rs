@@ -4,31 +4,44 @@ use clap::Parser;
 use pix::{hwb::SHwb8, Raster};
 use rustfft::{num_complex::Complex, FftPlanner};
 
+/// Command Line Arguments for processing a WAV data file
 #[derive(Parser, Debug)]
 struct ProgramArgs {
-    /// the path to the WAV file to process
+    /// the path to the target WAV file
     wav_filepath: String,
     /// number of seconds to convert into frames
     /// based on the sampling_rate of the file
-    #[clap(long, default_value_t = 0.2)]
+    #[clap(long, short = 'c', default_value_t = 0.1)]
     chunk_size_in_seconds: f64,
     /// amount of overlap to inlude with other chunk frames
-    #[clap(long, default_value_t = 0.2)]
+    #[clap(long, short = 'o', default_value_t = 0.2)]
     chunk_overlap: f64,
+    /// amount of time in seconds to process frames
+    #[clap(long, short)]
+    duration: Option<f64>,
+    /// start time in seconds for processing
+    #[clap(long, short, default_value_t = 0.0)]
+    start_time: f64,
 }
-// // TODO - max the normalization global, maybe by doing a second pass algorithm
-// // allow user to specify chunk overlap & a target interval
 
+// allow user to specify chunk overlap
 fn main() -> Result<(), Error> {
     let args = ProgramArgs::parse();
     println!("{args:#?}");
 
-    let mut wav_file = File::open(Path::new(&args.wav_filepath))?;
+    let signal_amplifier: fn(f64) -> f64 = match true {
+        true => |n| (8_f64 * n).powi(3),
+        false => |n| n,
+    };
 
-    let (header, data) = wav::read(&mut wav_file)?;
+    let wav_file_path = Path::new(&args.wav_filepath);
 
-    // reusable iterator that will be for consecutive reads
-    let data_reader: Vec<f64> = match header.bits_per_sample {
+    let (header, data) = {
+        let mut wav_file = File::open(wav_file_path)?;
+        wav::read(&mut wav_file)?
+    };
+
+    let pcm_samples: Vec<f64> = match header.bits_per_sample {
         8 => data
             .try_into_eight()
             .unwrap()
@@ -56,18 +69,34 @@ fn main() -> Result<(), Error> {
         _ => return Ok(eprintln!("was not matching bit size")),
     };
 
-    eprintln!("wav_data_length: {}", data_reader.len());
+    assert!(!pcm_samples.is_empty(), "WAV file was empty");
 
+    let last_frame = pcm_samples.len() - 1;
+    // Chunk Size = Number of frames (samples) to process at a time
+    // Get the chunk size by multiplying the seconds by the sampling rate
     let chunk_size = (args.chunk_size_in_seconds * header.sampling_rate as f64) as usize;
-    let chunk_count = data_reader.len() / chunk_size;
-    let channel_count = header.channel_count as usize;
+    // Starting frame index
+    // Do no frame to overflow past the length of the file
+    let start_chunk = ((args.start_time * header.sampling_rate as f64) as usize).min(last_frame);
+    // Ending frame index
+    // Do no frame to overflow past the length of the file
+    let end_chunk = args.duration.map_or_else(
+        || last_frame,
+        |duration| {
+            let duration_chunk = (duration * header.sampling_rate as f64) as usize;
+            (start_chunk + duration_chunk).min(last_frame)
+        },
+    );
 
-    eprintln!("chunk_size: {chunk_size}");
-    eprintln!("{header:#?}");
+    println!("{header:#?}");
+    println!("sample_count:     {}", pcm_samples.len());
+    println!("start_chunk:      {}", start_chunk);
+    println!("end_chunk:        {}", end_chunk);
 
     let fft = FftPlanner::new().plan_fft_forward(chunk_size);
 
-    let width = chunk_count;
+    // dimensions of the Raster
+    let width = (end_chunk - start_chunk) / chunk_size + 1;
     let height = {
         // this removes the mirror frequencies on the higher range,
         // which is caused by the symmetry of the Real portion
@@ -78,61 +107,64 @@ fn main() -> Result<(), Error> {
     };
 
     let mut map_data = vec![vec![0_f64; height]; width];
-    let mut global_max = 1_f64;
+    let mut global_max = f64::NAN;
 
-    for chunk in 0..chunk_count {
+    for (x, chunk) in (start_chunk..end_chunk).step_by(chunk_size).enumerate() {
         // reading the data for a single channel at a time and performing FFT on it
-        let mut channel_buffers: Vec<Vec<_>> = (0..channel_count)
-            .map(|channel| {
-                let mut mapped: Vec<Complex<f64>> = data_reader[channel + chunk * chunk_size..]
-                    .iter()
-                    .step_by(channel_count)
-                    .take(chunk_size)
-                    // turn the numbers into Complex form for fft library
-                    .map(Complex::from)
-                    .collect();
-                mapped.resize(chunk_size, Complex::from(0_f64));
-                mapped
-            })
-            .collect();
+        // TODO use all channels eventually
+        for channel in 0..1 {
+            let mut buffer = pcm_samples[channel + chunk..]
+                .iter()
+                .step_by(header.channel_count as usize)
+                .take(chunk_size)
+                // turn the numbers into Complex form for fft library
+                .map(Complex::from)
+                .collect::<Vec<Complex<f64>>>();
 
-        // use the first channel for now
-        let buffer = &mut channel_buffers[0];
-        fft.process(buffer);
+            // make sure that there is padding on the buffer,
+            // because the FFT expects a buffer of fixed length
+            buffer.resize(chunk_size, Complex::from(0_f64));
 
-        // Find the max in the pool in order to normalize the f64 values
-        // ignore the DC component by skipping the 0th index (corresponding to no period)
-        global_max = buffer[1..height]
-            .iter()
-            .map(|c| c.re.abs())
-            .fold(1f64, f64::max);
+            // FFT step
+            fft.process(&mut buffer);
 
-        for y in 1..height {
-            map_data[chunk][y] = buffer[y].re.abs();
+            // ignore the DC component by skipping the 0th index (corresponding to no period)
+            for y in 1..height {
+                let magnitude = buffer[y].re.abs();
+                map_data[x][y] = magnitude;
+                // Find the max in the pool in order to normalize the f64 values
+                global_max = global_max.max(magnitude);
+            }
         }
     }
 
     let mut raster = Raster::with_clear(width as u32, height as u32);
-    // update the pixel value
-    // Coordinate {
-    //      x <-- current chunk
-    //      y <-- current row
-    // }
     for (x, row) in map_data.iter().enumerate() {
         for (y, value) in row.iter().enumerate() {
             // normalize the Complex FFT value and use it for the color
-            let normalized = (u8::MAX as f64 * value / global_max) as u8;
-            *raster.pixel_mut(x as i32, y as i32) =
-                SHwb8::new(normalized / 2, normalized / 2, normalized);
+            //
+            // NOTE! normalization is order for the chunks covered
+            // during the tranformations, this means that processing
+            // the whole file yield as difference normalization ratio
+            let normalized = value / global_max;
+            let scale = (u8::MAX as f64 * signal_amplifier(normalized)).min(u8::MAX as f64) as u8;
+            // update the pixel value
+            // Coordinate {
+            //      x <-- current chunk
+            //      y <-- current row
+            // }
+            *raster.pixel_mut(x as i32, y as i32) = SHwb8::new(scale / 2, scale / 2, scale);
         }
     }
 
-    Ok(image::save_buffer(
-        &Path::new("graph.png"),
+    image::save_buffer(
+        &wav_file_path.with_extension("png"),
         raster.as_u8_slice(),
         raster.width(),
         raster.height(),
         image::ColorType::Rgb8,
     )
-    .expect("failed to parse raster to image."))
+    .expect("failed to parse raster to image.");
+
+    Ok(())
 }
