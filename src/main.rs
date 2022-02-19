@@ -1,4 +1,4 @@
-use std::{env, fs::File, io::Error, path::Path};
+use std::{env, fs::File, io::Error, path::Path, vec};
 
 use pix::{hwb::SHwb8, Raster};
 use rustfft::{num_complex::Complex, FftPlanner};
@@ -55,6 +55,8 @@ fn main() -> Result<(), Error> {
         _ => return Ok(eprintln!("was not matching bit size")),
     };
 
+    eprintln!("wav_data_length: {}", data_reader.len());
+
     let chunk_size = (chunk_size_in_seconds * header.sampling_rate as f64) as usize;
     let chunk_count = data_reader.len() / chunk_size;
     let channel_count = header.channel_count as usize;
@@ -74,9 +76,8 @@ fn main() -> Result<(), Error> {
         halved / 25
     };
 
-    let mut raster = Raster::with_clear(width as u32, height as u32);
-
-    eprintln!("wav_data_length: {}", data_reader.len());
+    let mut map_data = vec![vec![0_f64; height]; width];
+    let mut global_max = 1_f64;
 
     for chunk in 0..chunk_count {
         // reading the data for a single channel at a time and performing FFT on it
@@ -97,23 +98,31 @@ fn main() -> Result<(), Error> {
         // use the first channel for now
         let buffer = &mut channel_buffers[0];
         fft.process(buffer);
+
         // Find the max in the pool in order to normalize the f64 values
         // ignore the DC component by skipping the 0th index (corresponding to no period)
-        let max_val = buffer[1..height]
+        global_max = buffer[1..height]
             .iter()
             .map(|c| c.re.abs())
             .fold(1f64, f64::max);
 
-        for (y, value) in buffer[1..height].iter().enumerate() {
+        for y in 1..height {
+            map_data[chunk][y] = buffer[y].re.abs();
+        }
+    }
+
+    let mut raster = Raster::with_clear(width as u32, height as u32);
+    // update the pixel value
+    // Coordinate {
+    //      x <-- current chunk
+    //      y <-- current row
+    // }
+    for (x, row) in map_data.iter().enumerate() {
+        for (y, value) in row.iter().enumerate() {
             // normalize the Complex FFT value and use it for the color
-            let color_value = (u8::MAX as f64 * value.re.abs() / max_val) as u8;
-            // update the pixel value
-            // Coordinate {
-            //      x <-- current chunk
-            //      y <-- current row
-            // }
-            *raster.pixel_mut(chunk as i32, y as i32) =
-                SHwb8::new(color_value / 2, color_value / 2, color_value);
+            let normalized = (u8::MAX as f64 * value / global_max) as u8;
+            *raster.pixel_mut(x as i32, y as i32) =
+                SHwb8::new(normalized / 2, normalized / 2, normalized);
         }
     }
 
