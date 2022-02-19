@@ -8,14 +8,8 @@ fn main() -> Result<(), Error> {
         .nth(1)
         .expect("first argument should be path to a .wav file");
 
-    let start_time: f64 = env::args()
-        .nth(2)
-        .expect("second argument should be start time")
-        .parse()
-        .expect("expected a number");
-
     let duration: f64 = env::args()
-        .nth(3)
+        .nth(2)
         .expect("third argument should be a duration")
         .parse()
         .expect("expected a number");
@@ -24,12 +18,10 @@ fn main() -> Result<(), Error> {
 
     let (header, data) = wav::read(&mut wav_file)?;
 
-    let start_frame = (start_time * header.sampling_rate as f64) as usize;
     let chunk_size = (duration * header.sampling_rate as f64) as usize;
     let chunk_count = header.sampling_rate as usize / chunk_size;
     let channel_count = header.channel_count as usize;
 
-    eprintln!("start_frame: {start_frame}");
     eprintln!("chunk_size: {chunk_size}");
     eprintln!("{header:#?}");
 
@@ -49,7 +41,7 @@ fn main() -> Result<(), Error> {
             // reading the data for a single channel at a time and performing FFT on it
             let mut channel_buffers: Vec<Vec<_>> = (0..channel_count)
                 .map(|channel| {
-                    data_reader[start_frame + channel..]
+                    data_reader[channel..]
                         .iter()
                         .step_by(channel_count)
                         .take(chunk_size)
