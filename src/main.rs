@@ -1,6 +1,6 @@
 use std::{env, fs::File, io::Error, path::Path};
 
-use poloto::prelude::*;
+use pix::{hwb::SHwb8, Raster};
 use rustfft::{num_complex::Complex, FftPlanner};
 
 fn main() -> Result<(), Error> {
@@ -24,74 +24,72 @@ fn main() -> Result<(), Error> {
 
     let (header, data) = wav::read(&mut wav_file)?;
 
-    let start_time = (start_time * header.sampling_rate as f64) as usize;
+    let start_frame = (start_time * header.sampling_rate as f64) as usize;
     let chunk_size = (duration * header.sampling_rate as f64) as usize;
+    let chunk_count = header.sampling_rate as usize / chunk_size;
     let channel_count = header.channel_count as usize;
 
+    eprintln!("start_frame: {start_frame}");
+    eprintln!("chunk_size: {chunk_size}");
     eprintln!("{header:#?}");
 
     let fft = FftPlanner::new().plan_fft_forward(chunk_size);
 
-    if header.bits_per_sample == 16 {
+    let width = chunk_count;
+    let height = chunk_size;
+
+    let mut raster = Raster::with_clear(width as u32, height as u32);
+
+    if header.bits_per_sample == 8 {
         // reusable iterator that will be for consecutive reads
-        let data_reader = data.try_into_sixteen().unwrap().into_iter();
+        let data_reader = data.try_into_eight().unwrap();
         eprintln!("wav_data_length: {}", data_reader.len());
 
-        // reading the data for a single channel at a time and performing FFT on it
-        let mut channel_buffers: Vec<Vec<_>> = (0..channel_count)
-            .map(|channel| {
-                data_reader
-                    .clone()
-                    .skip(start_time + channel)
-                    .step_by(channel_count)
-                    .take(chunk_size)
-                    // Map smaller range integers to i64 to avoid overflows
-                    .map(|num| num as i64)
-                    // turn the numbers into Complex form for fft library
-                    .map(Complex::from)
-                    .collect::<Vec<Complex<i64>>>()
-            })
-            .collect();
+        for chunk in 0..chunk_size {
+            // reading the data for a single channel at a time and performing FFT on it
+            let mut channel_buffers: Vec<Vec<_>> = (0..channel_count)
+                .map(|channel| {
+                    data_reader[start_frame + channel..]
+                        .iter()
+                        .step_by(channel_count)
+                        .take(chunk_size)
+                        // Map smaller range integers to i64 to avoid overflows
+                        .map(|num| *num as f64)
+                        // turn the numbers into Complex form for fft library
+                        .map(Complex::from)
+                        .collect::<Vec<Complex<f64>>>()
+                })
+                .collect();
 
-        // Graph Generation Portion
-        let mut data = poloto::data();
-
-        for (channel, buffer) in &mut channel_buffers.iter_mut().enumerate() {
+            // use the first channel for now
+            let buffer = &mut channel_buffers[0];
             fft.process(buffer);
+            // Find the max in the pool in order to normalize the f64 values
+            // ignore the DC component by skipping the 0th index (corresponding to no period)
+            let max_val = buffer[1..].iter().map(|c| c.re.abs()).fold(1f64, f64::max);
 
-            for (i, a) in buffer
-                .iter()
-                // ignore the symmetric portion on the left
-                .skip(buffer.len() / 2)
-                // ignore the 0Hz DC signal
-                .skip(1)
-                .enumerate()
-            {
-                if a.re.abs() > chunk_size as i64 / 4 {
-                    eprintln!("{:#?}", i);
-                }
+            for (y, value) in buffer[1..].iter().enumerate() {
+                // normalize the Complex FFT value and use it for the color
+                let color_value = (u8::MAX as f64 * value.re.abs() / max_val) as u8;
+                // update the pixel value
+                // Coordinate {
+                //      x <-- current chunk
+                //      y <-- current row
+                // }
+                *raster.pixel_mut(chunk as i32, y as i32) =
+                    SHwb8::new(color_value / 2, color_value / 2, color_value);
             }
-
-            eprintln!("graph rendering");
-
-            data.line(
-                format!("Channel {}", channel),
-                buffer
-                    .iter()
-                    // ignore the symmetric portion on the left
-                    .skip(buffer.len() / 2)
-                    // ignore the 0Hz DC signal
-                    .skip(1)
-                    .enumerate()
-                    .map(|(i, n)| [i as f64, n.re.abs() as f64]),
-            );
         }
-
-        let mut plotter = data.build().plot("Channels", "x", "y");
-        println!("{}", poloto::disp(|a| plotter.simple_theme(a)));
     } else {
         eprintln!("was not matching bit size");
     }
 
-    Ok(())
+    Ok(image::save_buffer(
+        &Path::new("graph.png"),
+        raster.as_u8_slice(),
+        raster.width(),
+        raster.height(),
+        image::ColorType::Rgb8,
+    )
+    .expect("failed to parse raster to image."))
 }
