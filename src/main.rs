@@ -14,6 +14,8 @@ fn main() -> Result<(), Error> {
         .parse()
         .expect("expected a number");
 
+    // TODO - max the normalization global, maybe by doing a second pass algorithm
+    // allow user to specify chunk overlap & a target interval
     let chunk_overlap: f64 = env::args()
         .nth(3)
         .expect("third argument should be a duration")
@@ -63,7 +65,14 @@ fn main() -> Result<(), Error> {
     let fft = FftPlanner::new().plan_fft_forward(chunk_size);
 
     let width = chunk_count;
-    let height = chunk_size / 2;
+    let height = {
+        // this removes the mirror frequencies on the higher range,
+        // which is caused by the symmetry of the Real portion
+        // of the Fast Fourier Transform
+        let halved = chunk_size / 2;
+        // we are gonna cut out some of the higher ranges that we dont want
+        halved / 25
+    };
 
     let mut raster = Raster::with_clear(width as u32, height as u32);
 
