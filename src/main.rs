@@ -1,6 +1,7 @@
 use std::{fs::File, io::Error, path::Path, vec};
 
 use clap::Parser;
+use midly::{Format, Header, Timing, TrackEvent, TrackEventKind};
 use pix::{hwb::SHwb8, Raster};
 use rustfft::{num_complex::Complex, FftPlanner};
 
@@ -28,17 +29,26 @@ fn main() -> Result<(), Error> {
     let args = ProgramArgs::parse();
     println!("{args:#?}");
 
-    let signal_amplifier: fn(f64) -> f64 = match true {
-        true => |n| (10_f64 * n).powi(2),
-        false => |n| n,
-    };
-
     let wav_file_path = Path::new(&args.wav_filepath);
 
-    let (header, data) = {
-        let mut wav_file = File::open(wav_file_path)?;
-        wav::read(&mut wav_file)?
-    };
+    let (header, pcm_samples) = parse_wav(&wav_file_path.to_str().unwrap())?;
+
+    let (fft_map, width, height) = fft_transform(&pcm_samples, &header, &args)?;
+
+    save_image(
+        &fft_map,
+        width,
+        height / 10,
+        &wav_file_path.with_extension("png").to_str().unwrap(),
+    );
+
+    save_midi(&wav_file_path.with_extension("midi").to_str().unwrap());
+
+    Ok(())
+}
+
+fn parse_wav(wav_file_path: &str) -> Result<(wav::Header, Vec<f64>), Error> {
+    let (header, data) = wav::read(&mut File::open(wav_file_path)?)?;
 
     let pcm_samples: Vec<f64> = match header.bits_per_sample {
         8 => data
@@ -65,14 +75,19 @@ fn main() -> Result<(), Error> {
             .into_iter()
             .map(|num| num as f64)
             .collect(),
-        _ => {
-            eprintln!("was not matching bit size");
-            return Ok(());
-        }
+        _ => panic!("was not matching bit size"),
     };
 
     assert!(!pcm_samples.is_empty(), "WAV file was empty");
 
+    Ok((header, pcm_samples))
+}
+
+fn fft_transform(
+    pcm_samples: &[f64],
+    header: &wav::Header,
+    args: &ProgramArgs,
+) -> Result<(Vec<Vec<f64>>, usize, usize), Error> {
     let last_frame = pcm_samples.len() - 1;
     // Chunk Size = Number of frames (samples) to process at a time
     // Get the chunk size by multiplying the seconds by the sampling rate
@@ -96,18 +111,12 @@ fn main() -> Result<(), Error> {
     println!("start_chunk:      {}", start_chunk);
     println!("end_chunk:        {}", end_chunk);
 
-    // dimensions of the Raster
+    // dimensions of the resulting fft_map
+    // (the extra + 1 is necessary for numbers that dont divide nicely?)
     let width = (end_chunk - start_chunk) / chunk_size + 1;
-    let height = {
-        // this removes the mirror frequencies on the higher range,
-        // which is caused by the symmetry of the Real portion
-        // of the Fast Fourier Transform
-        let halved = chunk_size / 2;
-        // we are gonna cut out some of the higher ranges that we dont want
-        halved / 10
-    };
-
-    println!("output dimensions: {:?}", (width, height));
+    // this removes the mirror frequencies on the higher range,
+    // which is caused by the symmetry of the real portion of the Fast Fourier Transform
+    let height = chunk_size / 2;
 
     // Vec to store FFT transformation after the buffer is overwritten
     let mut fft_map = vec![vec![0_f64; height]; width];
@@ -117,9 +126,8 @@ fn main() -> Result<(), Error> {
 
     for (x, chunk) in (start_chunk..end_chunk).step_by(chunk_size).enumerate() {
         // reading the data for a single channel at a time and performing FFT on it
-        // TODO use all channels eventually
         for channel in 0..header.channel_count as usize {
-            let mut buffer = pcm_samples[channel + chunk..]
+            let mut buffer = &mut pcm_samples[channel + chunk..]
                 .iter()
                 .step_by(header.channel_count as usize)
                 .take(chunk_size)
@@ -147,17 +155,20 @@ fn main() -> Result<(), Error> {
         }
     }
 
-    // we dont need the FFT transformer anymore
-    drop(fft);
+    Ok((fft_map, width, height))
+}
 
+fn save_image(fft_map: &Vec<Vec<f64>>, width: usize, height: usize, image_file: &str) {
     // Global max seen during transform for normalization purposes
     // Find the max in the pool in order to normalize the f64 values
     let signal_max = fft_map.iter().flatten().fold(f64::NAN, |acc, i| i.max(acc));
 
+    let signal_amplifier: fn(f64) -> f64 = |n| (10_f64 * n).powi(2);
+
     // Generate image representing the heatmap
     let mut raster = Raster::with_clear(width as u32, height as u32);
     for (x, row) in fft_map.iter().enumerate() {
-        for (y, sigal) in row.iter().enumerate() {
+        for (y, sigal) in row.iter().enumerate().take_while(|(y, _)| *y < height) {
             // normalize the Complex FFT value and use it for the color
             //
             // NOTE! normalization is only applied/computed for the chunks covered during the tranformations,
@@ -175,13 +186,48 @@ fn main() -> Result<(), Error> {
     }
 
     image::save_buffer(
-        &wav_file_path.with_extension("png"),
+        image_file,
         raster.as_u8_slice(),
         raster.width(),
         raster.height(),
         image::ColorType::Rgb8,
     )
     .expect("failed to parse raster to image.");
+}
 
-    Ok(())
+// TODO
+fn save_midi(file_path: &str) {
+    let midi_data = vec![vec![
+        TrackEvent {
+            delta: 0.into(),
+            kind: TrackEventKind::Midi {
+                channel: 0.into(),
+                message: midly::MidiMessage::NoteOn {
+                    vel: 200.into(),
+                    key: 60.into(),
+                },
+            },
+        },
+        TrackEvent {
+            delta: 5000.into(),
+            kind: TrackEventKind::Midi {
+                channel: 0.into(),
+                message: midly::MidiMessage::NoteOn {
+                    vel: 0.into(),
+                    key: 60.into(),
+                },
+            },
+        },
+        TrackEvent {
+            delta: 0.into(),
+            kind: TrackEventKind::Meta(midly::MetaMessage::EndOfTrack),
+        },
+    ]];
+
+    midly::write_std(
+        &Header::new(Format::SingleTrack, Timing::Metrical(100.into())),
+        &midi_data,
+        &mut File::create(file_path).unwrap(),
+    )
+    .expect("failed to write midi.");
 }
