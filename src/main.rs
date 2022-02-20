@@ -47,6 +47,9 @@ fn main() -> Result<(), Error> {
     Ok(())
 }
 
+/// Extracts the Header and PCM data from a WAV format audio file.
+/// PCM data is converted into f64 such that the FFT becomes easier to handle
+/// overflow and normalizing operations
 fn parse_wav(input_file: &str) -> Result<(wav::Header, Vec<f64>), Error> {
     let (header, data) = wav::read(&mut File::open(input_file)?)?;
 
@@ -83,6 +86,11 @@ fn parse_wav(input_file: &str) -> Result<(wav::Header, Vec<f64>), Error> {
     Ok((header, pcm_samples))
 }
 
+/// Returns the 2D matrix of FFT data, along with the dimensions of the data
+///
+/// ## Notes
+/// - half of the FFT data per-timeslice is discarded as it is a mirror of the first half.
+/// - data points are additive per channel, meaning that frequencies occuring in both channels will appear stronger
 fn fft_transform(
     pcm_samples: &[f64],
     header: &wav::Header,
