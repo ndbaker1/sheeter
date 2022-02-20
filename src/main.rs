@@ -11,11 +11,11 @@ struct ProgramArgs {
     wav_filepath: String,
     /// number of seconds to convert into frames
     /// based on the sampling_rate of the file
-    #[clap(long, short = 'c', default_value_t = 0.1)]
-    chunk_size_in_seconds: f64,
+    #[clap(long, short, default_value_t = 0.1)]
+    time_step: f64,
     /// amount of overlap to inlude with other chunk frames
-    #[clap(long, short = 'o', default_value_t = 0.2)]
-    chunk_overlap: f64,
+    #[clap(long, default_value_t = 0.1)]
+    chunk_size_in_seconds: f64,
     /// amount of time in seconds to process frames
     #[clap(long, short)]
     duration: Option<f64>,
@@ -24,13 +24,12 @@ struct ProgramArgs {
     start_time: f64,
 }
 
-// allow user to specify chunk overlap
 fn main() -> Result<(), Error> {
     let args = ProgramArgs::parse();
     println!("{args:#?}");
 
     let signal_amplifier: fn(f64) -> f64 = match true {
-        true => |n| (8_f64 * n).powi(2),
+        true => |n| (10_f64 * n).powi(2),
         false => |n| n,
     };
 
@@ -66,7 +65,10 @@ fn main() -> Result<(), Error> {
             .into_iter()
             .map(|num| num as f64)
             .collect(),
-        _ => return Ok(eprintln!("was not matching bit size")),
+        _ => {
+            eprintln!("was not matching bit size");
+            return Ok(());
+        }
     };
 
     assert!(!pcm_samples.is_empty(), "WAV file was empty");
@@ -74,7 +76,7 @@ fn main() -> Result<(), Error> {
     let last_frame = pcm_samples.len() - 1;
     // Chunk Size = Number of frames (samples) to process at a time
     // Get the chunk size by multiplying the seconds by the sampling rate
-    let chunk_size = (args.chunk_size_in_seconds * header.sampling_rate as f64) as usize;
+    let chunk_size = (args.time_step * header.sampling_rate as f64) as usize;
     // Starting frame index
     // Do no frame to overflow past the length of the file
     let start_chunk = ((args.start_time * header.sampling_rate as f64) as usize).min(last_frame);
@@ -90,10 +92,9 @@ fn main() -> Result<(), Error> {
 
     println!("{header:#?}");
     println!("sample_count:     {}", pcm_samples.len());
+    println!("chunk_size:       {}", chunk_size);
     println!("start_chunk:      {}", start_chunk);
     println!("end_chunk:        {}", end_chunk);
-
-    let fft = FftPlanner::new().plan_fft_forward(chunk_size);
 
     // dimensions of the Raster
     let width = (end_chunk - start_chunk) / chunk_size + 1;
@@ -106,13 +107,20 @@ fn main() -> Result<(), Error> {
         halved / 10
     };
 
-    let mut map_data = vec![vec![0_f64; height]; width];
+    println!("output dimensions: {:?}", (width, height));
+
+    // Vec to store FFT transformation after the buffer is overwritten
+    let mut fft_map = vec![vec![0_f64; height]; width];
+    // Global max seen during transform for normalization purposes
     let mut global_max = f64::NAN;
+
+    // Setup FFT transformer
+    let fft = FftPlanner::new().plan_fft_forward(chunk_size);
 
     for (x, chunk) in (start_chunk..end_chunk).step_by(chunk_size).enumerate() {
         // reading the data for a single channel at a time and performing FFT on it
         // TODO use all channels eventually
-        for channel in 0..1 {
+        for channel in 0..header.channel_count as usize {
             let mut buffer = pcm_samples[channel + chunk..]
                 .iter()
                 .step_by(header.channel_count as usize)
@@ -128,18 +136,26 @@ fn main() -> Result<(), Error> {
             // FFT step
             fft.process(&mut buffer);
 
-            // ignore the DC component by skipping the 0th index (corresponding to no period)
-            for y in 1..height {
-                let magnitude = buffer[y].re.abs();
-                map_data[x][y] = magnitude;
+            for (y, magnitude) in buffer
+                .iter()
+                .take(height)
+                // ignore the DC component by skipping the 0th index (corresponding to no period)
+                .skip(1)
+                .map(|complex| complex.re.abs())
+                .enumerate()
+            {
+                fft_map[x][y] += magnitude;
                 // Find the max in the pool in order to normalize the f64 values
-                global_max = global_max.max(magnitude);
+                global_max = global_max.max(fft_map[x][y]);
             }
         }
     }
 
+    // we dont need the FFT transformer anymore
+    drop(fft);
+
     let mut raster = Raster::with_clear(width as u32, height as u32);
-    for (x, row) in map_data.iter().enumerate() {
+    for (x, row) in fft_map.iter().enumerate() {
         for (y, value) in row.iter().enumerate() {
             // normalize the Complex FFT value and use it for the color
             //
