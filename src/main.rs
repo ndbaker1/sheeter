@@ -111,8 +111,6 @@ fn main() -> Result<(), Error> {
 
     // Vec to store FFT transformation after the buffer is overwritten
     let mut fft_map = vec![vec![0_f64; height]; width];
-    // Global max seen during transform for normalization purposes
-    let mut global_max = f64::NAN;
 
     // Setup FFT transformer
     let fft = FftPlanner::new().plan_fft_forward(chunk_size);
@@ -145,8 +143,6 @@ fn main() -> Result<(), Error> {
                 .enumerate()
             {
                 fft_map[x][y] += magnitude;
-                // Find the max in the pool in order to normalize the f64 values
-                global_max = global_max.max(fft_map[x][y]);
             }
         }
     }
@@ -154,15 +150,21 @@ fn main() -> Result<(), Error> {
     // we dont need the FFT transformer anymore
     drop(fft);
 
+    // Global max seen during transform for normalization purposes
+    // Find the max in the pool in order to normalize the f64 values
+    let signal_max = fft_map.iter().flatten().fold(f64::NAN, |acc, i| i.max(acc));
+
+    // Generate image representing the heatmap
     let mut raster = Raster::with_clear(width as u32, height as u32);
     for (x, row) in fft_map.iter().enumerate() {
-        for (y, value) in row.iter().enumerate() {
+        for (y, sigal) in row.iter().enumerate() {
             // normalize the Complex FFT value and use it for the color
             //
             // NOTE! normalization is only applied/computed for the chunks covered during the tranformations,
             // this means that processing different portions withh yield different normalization ratios
-            let normalized = value / global_max;
-            let scale = (u8::MAX as f64 * signal_amplifier(normalized)).min(u8::MAX as f64) as u8;
+            let normalized_signal = sigal / signal_max;
+            let scale =
+                (u8::MAX as f64 * signal_amplifier(normalized_signal)).min(u8::MAX as f64) as u8;
             // update the pixel value
             // Coordinate {
             //      x <-- current chunk
