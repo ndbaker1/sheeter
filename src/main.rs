@@ -167,8 +167,8 @@ fn save_image(fft_map: &Vec<Vec<f64>>, width: usize, height: usize, image_file: 
 
     // Generate image representing the heatmap
     let mut raster = Raster::with_clear(width as u32, height as u32);
-    for (x, row) in fft_map.iter().enumerate() {
-        for (y, sigal) in row.iter().enumerate().take_while(|(y, _)| *y < height) {
+    for (x, row) in fft_map.iter().enumerate().take_while(|&(x, _)| x < width) {
+        for (y, sigal) in row.iter().enumerate().take_while(|&(y, _)| y < height) {
             // normalize the Complex FFT value and use it for the color
             //
             // NOTE! normalization is only applied/computed for the chunks covered during the tranformations,
