@@ -1,4 +1,4 @@
-use std::{fs::File, io::Error, path::Path, vec};
+use std::{fs::File, io::Error, path::Path, process::Command, vec};
 
 use clap::Parser;
 use midly::{Format, Header, Timing, TrackEvent, TrackEventKind};
@@ -9,7 +9,7 @@ use rustfft::{num_complex::Complex, FftPlanner};
 #[derive(Parser, Debug)]
 struct ProgramArgs {
     /// the path to the target WAV file
-    wav_filepath: String,
+    audio_filepath: String,
     /// number of seconds to convert into frames
     /// based on the sampling_rate of the file
     #[clap(long, short, default_value_t = 0.1)]
@@ -29,9 +29,9 @@ fn main() -> Result<(), Error> {
     let args = ProgramArgs::parse();
     println!("{args:#?}");
 
-    let wav_file_path = Path::new(&args.wav_filepath);
+    let wav_filepath = path_into_wav(&args.audio_filepath).unwrap();
 
-    let (header, pcm_samples) = parse_wav(&wav_file_path.to_str().unwrap())?;
+    let (header, pcm_samples) = parse_wav(wav_filepath.to_str().unwrap())?;
 
     let (fft_map, width, height) = fft_transform(&pcm_samples, &header, &args)?;
 
@@ -39,16 +39,16 @@ fn main() -> Result<(), Error> {
         &fft_map,
         width,
         height / 10,
-        &wav_file_path.with_extension("png").to_str().unwrap(),
+        wav_filepath.with_extension("png").to_str().unwrap(),
     );
 
-    save_midi(&wav_file_path.with_extension("midi").to_str().unwrap());
+    save_midi(wav_filepath.with_extension("midi").to_str().unwrap());
 
     Ok(())
 }
 
-fn parse_wav(wav_file_path: &str) -> Result<(wav::Header, Vec<f64>), Error> {
-    let (header, data) = wav::read(&mut File::open(wav_file_path)?)?;
+fn parse_wav(input_file: &str) -> Result<(wav::Header, Vec<f64>), Error> {
+    let (header, data) = wav::read(&mut File::open(input_file)?)?;
 
     let pcm_samples: Vec<f64> = match header.bits_per_sample {
         8 => data
@@ -127,7 +127,7 @@ fn fft_transform(
     for (x, chunk) in (start_chunk..end_chunk).step_by(chunk_size).enumerate() {
         // reading the data for a single channel at a time and performing FFT on it
         for channel in 0..header.channel_count as usize {
-            let mut buffer = &mut pcm_samples[channel + chunk..]
+            let buffer = &mut pcm_samples[channel + chunk..]
                 .iter()
                 .step_by(header.channel_count as usize)
                 .take(chunk_size)
@@ -140,7 +140,7 @@ fn fft_transform(
             buffer.resize(chunk_size, Complex::from(0_f64));
 
             // FFT step
-            fft.process(&mut buffer);
+            fft.process(buffer);
 
             for (y, magnitude) in buffer
                 .iter()
@@ -158,7 +158,10 @@ fn fft_transform(
     Ok((fft_map, width, height))
 }
 
-fn save_image(fft_map: &Vec<Vec<f64>>, width: usize, height: usize, image_file: &str) {
+/// Renders the FFT values onto a Raster image so that you can visualize the resulting frequencies
+/// This is the precursor to a MIDI translation of the data, as the image is easy to understand
+/// but not concrete enough to make inferences about the notes/keys being concurrently pressed
+fn save_image(fft_map: &[Vec<f64>], width: usize, height: usize, image_file: &str) {
     // Global max seen during transform for normalization purposes
     // Find the max in the pool in order to normalize the f64 values
     let signal_max = fft_map.iter().flatten().fold(f64::NAN, |acc, i| i.max(acc));
@@ -230,4 +233,28 @@ fn save_midi(file_path: &str) {
         &mut File::create(file_path).unwrap(),
     )
     .expect("failed to write midi.");
+}
+
+/// Convert a provided path string for an audio file into a Path struct.
+///
+/// If the path given is not already a WAV file then utilize ffmpeg from the User's environment in order to convert the file into WAV format.
+/// This will only work for files that are still in some valid auido format, such as mp3.
+///
+/// ## Errors
+/// None will be returned when the file does not have an extension.
+fn path_into_wav(filepath: &str) -> Option<&Path> {
+    let input_file = Path::new(filepath);
+
+    match input_file.extension().unwrap().to_str()? {
+        "wav" => Some(input_file),
+        _ => {
+            let wav_path = Path::new(Box::leak(Box::new(input_file.with_extension("wav"))));
+            Command::new("ffmpeg")
+            .arg("-i")
+            .args([input_file, wav_path])
+            .output().expect("could not use ffmpeg to convert input into .wav format. Check if ffmpeg is installed.");
+
+            Some(wav_path)
+        }
+    }
 }
