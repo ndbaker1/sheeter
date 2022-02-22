@@ -10,19 +10,25 @@ use rustfft::{num_complex::Complex, FftPlanner};
 struct ProgramArgs {
     /// the path to the target WAV file
     audio_filepath: String,
+    /// start time in seconds for processing
+    #[clap(long, short, default_value_t = 0.0)]
+    start_time: f64,
     /// number of seconds to convert into frames
     /// based on the sampling_rate of the file
     #[clap(long, short, default_value_t = 0.1)]
     time_step: f64,
     /// amount of overlap to inlude with other chunk frames
-    #[clap(long, default_value_t = 0.1)]
-    chunk_size_in_seconds: f64,
+    #[clap(long, short)]
+    chunk_step: Option<f64>,
     /// amount of time in seconds to process frames
     #[clap(long, short)]
     duration: Option<f64>,
-    /// start time in seconds for processing
-    #[clap(long, short, default_value_t = 0.0)]
-    start_time: f64,
+}
+
+impl ProgramArgs {
+    fn get_chunk_step(&self) -> f64 {
+        self.chunk_step.unwrap_or_else(|| self.time_step)
+    }
 }
 
 fn main() -> Result<(), Error> {
@@ -97,55 +103,57 @@ fn fft_transform(
     args: &ProgramArgs,
 ) -> Result<(Vec<Vec<f64>>, usize, usize), Error> {
     let last_frame = pcm_samples.len() - 1;
-    // Chunk Size = Number of frames (samples) to process at a time
-    // Get the chunk size by multiplying the seconds by the sampling rate
-    let chunk_size = (args.time_step * header.sampling_rate as f64) as usize;
+    // number of frames to skip for each column in the transform map
+    let step_size = (args.time_step * header.sampling_rate as f64) as usize;
     // Starting frame index
-    // Do no frame to overflow past the length of the file
     let start_chunk = ((args.start_time * header.sampling_rate as f64) as usize).min(last_frame);
     // Ending frame index
-    // Do no frame to overflow past the length of the file
     let end_chunk = args.duration.map_or_else(
         || last_frame,
-        |duration| {
-            let duration_chunk = (duration * header.sampling_rate as f64) as usize;
+        |seconds| {
+            let duration_chunk = (seconds * header.sampling_rate as f64) as usize;
             (start_chunk + duration_chunk).min(last_frame)
         },
     );
+    // the amount of frames to process for each time step
+    let read_chunk_size = (args.get_chunk_step() * header.sampling_rate as f64) as usize;
 
     println!("{header:#?}");
     println!("sample_count:     {}", pcm_samples.len());
-    println!("chunk_size:       {}", chunk_size);
+    println!("chunk_size:       {}", step_size);
     println!("start_chunk:      {}", start_chunk);
+    println!("read_chunk_size:  {}", read_chunk_size);
     println!("end_chunk:        {}", end_chunk);
 
     // dimensions of the resulting fft_map
     // (the extra + 1 is necessary for numbers that dont divide nicely?)
-    let width = (end_chunk - start_chunk) / chunk_size + 1;
+    let width = (end_chunk - start_chunk) / step_size + 1;
     // this removes the mirror frequencies on the higher range,
     // which is caused by the symmetry of the real portion of the Fast Fourier Transform
-    let height = chunk_size / 2;
+    let height = read_chunk_size / 2;
 
     // Vec to store FFT transformation after the buffer is overwritten
     let mut fft_map = vec![vec![0_f64; height]; width];
 
     // Setup FFT transformer
-    let fft = FftPlanner::new().plan_fft_forward(chunk_size);
+    let fft = FftPlanner::new().plan_fft_forward(read_chunk_size);
 
-    for (x, chunk) in (start_chunk..end_chunk).step_by(chunk_size).enumerate() {
+    for (x, chunk_start) in (start_chunk..end_chunk).step_by(step_size).enumerate() {
         // reading the data for a single channel at a time and performing FFT on it
         for channel in 0..header.channel_count as usize {
-            let buffer = &mut pcm_samples[channel + chunk..]
+            let buffer = &mut pcm_samples
+                [channel + (chunk_start - read_chunk_size / 2).max(0).min(last_frame)..]
                 .iter()
                 .step_by(header.channel_count as usize)
-                .take(chunk_size)
+                .take(read_chunk_size)
                 // turn the numbers into Complex form for fft library
                 .map(Complex::from)
                 .collect::<Vec<Complex<f64>>>();
 
             // make sure that there is padding on the buffer,
             // because the FFT expects a buffer of fixed length
-            buffer.resize(chunk_size, Complex::from(0_f64));
+            // !!! This behavior is still not right because it needs to pad left or right depending on if it is at the beginning or end of the file
+            buffer.resize(read_chunk_size, Complex::from(0_f64));
 
             // FFT step
             fft.process(buffer);
