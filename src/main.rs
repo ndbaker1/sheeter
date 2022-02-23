@@ -39,7 +39,20 @@ fn main() -> Result<(), Error> {
 
     let (header, pcm_samples) = parse_wav(wav_filepath.to_str().unwrap())?;
 
-    let (fft_map, width, height) = fft_transform(&pcm_samples, &header, &args)?;
+    let (mut fft_map, width, height) = fft_transform(&pcm_samples, &header, &args)?;
+
+    // // change the parameters here to possibly get a better respresentation of stronger frequencies
+    // fft_map
+    //     .iter_mut()
+    //     .flatten()
+    //     .for_each(|val| *val = val.powi(1));
+
+    let signal_max = fft_map.iter().flatten().fold(f64::NAN, |acc, i| i.max(acc));
+
+    fft_map
+        .iter_mut()
+        .flatten()
+        .for_each(|val| *val /= signal_max);
 
     save_image(
         &fft_map,
@@ -141,8 +154,10 @@ fn fft_transform(
     for (x, chunk_start) in (start_chunk..end_chunk).step_by(step_size).enumerate() {
         // reading the data for a single channel at a time and performing FFT on it
         for channel in 0..header.channel_count as usize {
-            let buffer = &mut pcm_samples
-                [channel + (chunk_start - read_chunk_size / 2).max(0).min(last_frame)..]
+            let buffer = &mut pcm_samples[channel
+                + usize::saturating_sub(chunk_start, read_chunk_size / 2)
+                    .max(0)
+                    .min(last_frame)..]
                 .iter()
                 .step_by(header.channel_count as usize)
                 .take(read_chunk_size)
@@ -182,8 +197,6 @@ fn save_image(fft_map: &[Vec<f64>], width: usize, height: usize, image_file: &st
     // Find the max in the pool in order to normalize the f64 values
     let signal_max = fft_map.iter().flatten().fold(f64::NAN, |acc, i| i.max(acc));
 
-    let signal_amplifier: fn(f64) -> f64 = |n| (10_f64 * n).powi(2);
-
     // Generate image representing the heatmap
     let mut raster = Raster::with_clear(width as u32, height as u32);
     for (x, row) in fft_map.iter().enumerate().take_while(|&(x, _)| x < width) {
@@ -193,8 +206,7 @@ fn save_image(fft_map: &[Vec<f64>], width: usize, height: usize, image_file: &st
             // NOTE! normalization is only applied/computed for the chunks covered during the tranformations,
             // this means that processing different portions withh yield different normalization ratios
             let normalized_signal = sigal / signal_max;
-            let scale =
-                (u8::MAX as f64 * signal_amplifier(normalized_signal)).min(u8::MAX as f64) as u8;
+            let scale = (u8::MAX as f64 * normalized_signal).min(u8::MAX as f64) as u8;
             // update the pixel value
             // Coordinate {
             //      x <-- current chunk
