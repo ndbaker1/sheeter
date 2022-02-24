@@ -41,18 +41,7 @@ fn main() -> Result<(), Error> {
 
     let (mut fft_map, width, height) = fft_transform(&pcm_samples, &header, &args)?;
 
-    // // change the parameters here to possibly get a better respresentation of stronger frequencies
-    // fft_map
-    //     .iter_mut()
-    //     .flatten()
-    //     .for_each(|val| *val = val.powi(1));
-
-    let signal_max = fft_map.iter().flatten().fold(f64::NAN, |acc, i| i.max(acc));
-
-    fft_map
-        .iter_mut()
-        .flatten()
-        .for_each(|val| *val /= signal_max);
+    amplify_and_normalize(&mut fft_map, None);
 
     save_image(
         &fft_map,
@@ -64,6 +53,25 @@ fn main() -> Result<(), Error> {
     save_midi(wav_filepath.with_extension("midi").to_str().unwrap());
 
     Ok(())
+}
+
+/// Optionally perform an element-wise transformation on the fft data
+/// in oder to modify the strength of particular frequencies.
+/// Next, normalize the data with the highest value in the map.
+fn amplify_and_normalize(fft_map: &mut [Vec<f64>], optional_amplifier: Option<fn(&f64) -> f64>) {
+    if let Some(amplifier) = optional_amplifier {
+        fft_map
+            .iter_mut()
+            .flatten()
+            .for_each(|val| *val = amplifier(val));
+    }
+
+    let signal_max = fft_map.iter().flatten().fold(f64::NAN, |acc, i| i.max(acc));
+
+    fft_map
+        .iter_mut()
+        .flatten()
+        .for_each(|val| *val /= signal_max);
 }
 
 /// Extracts the Header and PCM data from a WAV format audio file.
