@@ -5,10 +5,9 @@ use midly::{Format, Header, Timing, TrackEvent, TrackEventKind};
 use pix::{hwb::SHwb8, Raster};
 use rustfft::{num_complex::Complex, FftPlanner};
 
-/// Command Line Arguments for processing a WAV data file
 #[derive(Parser, Debug)]
 struct ProgramArgs {
-    /// the path to the target WAV file
+    /// the path to the target audio file
     audio_filepath: String,
     /// start time in seconds for processing
     #[clap(long, short, default_value_t = 0.0)]
@@ -17,7 +16,8 @@ struct ProgramArgs {
     /// based on the sampling_rate of the file
     #[clap(long, short, default_value_t = 0.1)]
     time_step: f64,
-    /// amount of overlap to inlude with other chunk frames
+    /// amount of overlap to inlude with other chunk frames.
+    /// If no value is provided then it will default to be equal to the timestep
     #[clap(long, short)]
     chunk_step: Option<f64>,
     /// amount of time in seconds to process frames
@@ -35,7 +35,7 @@ fn main() -> Result<(), Error> {
     let args = ProgramArgs::parse();
     println!("{args:#?}");
 
-    let wav_filepath = path_into_wav(&args.audio_filepath).unwrap();
+    let wav_filepath = path_into_wav(Path::new(&args.audio_filepath)).unwrap();
 
     let (header, pcm_samples) = parse_wav(wav_filepath.to_str().unwrap())?;
 
@@ -279,19 +279,20 @@ fn save_midi(file_path: &str) {
 /// ## Errors
 /// - This will only work for files that are still in some valid auido format, such as mp3.
 /// - None will be returned when the file does not have an extension.
-fn path_into_wav(filepath: &str) -> Option<&Path> {
-    let input_file = Path::new(filepath);
+fn path_into_wav(filepath: &Path) -> Option<&Path> {
+    let wav_extension_file = Box::leak(Box::new(filepath.with_extension("wav")));
 
-    match input_file.extension().unwrap().to_str()? {
-        "wav" => Some(input_file),
-        _ => {
-            let wav_path = Path::new(Box::leak(Box::new(input_file.with_extension("wav"))));
-            Command::new("ffmpeg")
+    if !wav_extension_file.exists() {
+        println!(
+            "attempting to use locally installed ffmpeg to convert {:?} to {:?}",
+            filepath.file_name()?,
+            wav_extension_file.file_name()?,
+        );
+        Command::new("ffmpeg")
             .arg("-i")
-            .args([input_file, wav_path])
+            .args([filepath, wav_extension_file])
             .output().expect("could not use ffmpeg to convert input into .wav format. Check if ffmpeg is installed.");
-
-            Some(wav_path)
-        }
     }
+
+    return Some(wav_extension_file);
 }
