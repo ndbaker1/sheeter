@@ -273,11 +273,12 @@ fn save_midi(file_path: &str) {
 
 /// Convert a provided path string for an audio file into a Path struct.
 ///
-/// If the path given is not already a WAV file then utilize ffmpeg from the User's environment in order to convert the file into WAV format.
-/// This will only work for files that are still in some valid auido format, such as mp3.
+/// If the path given is not already a WAV file then utilize `ffmpeg` from the User's environment
+/// in order to convert the file into WAV format.
 ///
 /// ## Errors
-/// None will be returned when the file does not have an extension.
+/// - This will only work for files that are still in some valid auido format, such as mp3.
+/// - None will be returned when the file does not have an extension.
 fn path_into_wav(filepath: &str) -> Option<&Path> {
     let input_file = Path::new(filepath);
 
