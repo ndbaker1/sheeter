@@ -245,24 +245,24 @@ fn save_image(fft_map: &[Vec<f64>], width: usize, height: usize, image_file: &st
 /// 2. sorts objects by time to be used as delta in MIDI standard
 /// 3. parses list into TrackEvents
 fn save_midi(fft_data: &[Vec<f64>], file_path: &str) {
-    let mut midi_data: Vec<TrackEvent> = generate_notes(fft_data)
-        .into_iter()
-        .flat_map(|(note, start, end)| [(note, start, 0), (note, end, 1)])
-        .map(|(note, time, order)| TrackEvent {
-            delta: (time as u32).into(),
-            kind: TrackEventKind::Midi {
-                channel: 0.into(),
-                message: midly::MidiMessage::NoteOn {
-                    vel: match order {
-                        0 => 90.into(),
-                        1 => 0.into(),
-                        _ => 0.into(),
-                    },
-                    key: note.into(),
-                },
-            },
-        })
-        .collect();
+    let mut midi_data: Vec<TrackEvent> = vec![];
+    // generate_notes(fft_data)
+    //     .into_iter()
+    //     .map(|a| TrackEvent {
+    //         delta: (time as u32).into(),
+    //         kind: TrackEventKind::Midi {
+    //             channel: 0.into(),
+    //             message: midly::MidiMessage::NoteOn {
+    //                 vel: match order {
+    //                     0 => 90.into(),
+    //                     1 => 0.into(),
+    //                     _ => 0.into(),
+    //                 },
+    //                 key: note.into(),
+    //             },
+    //         },
+    //     })
+    //     .collect();
 
     // append the end of track message
     midi_data.push(TrackEvent {
@@ -281,8 +281,24 @@ fn save_midi(fft_data: &[Vec<f64>], file_path: &str) {
 /// Returns a set of notes that contain the start and end time
 ///
 /// maybe this is a neural network
-fn generate_notes(fft_data: &[Vec<f64>]) -> Vec<(u8, f64, f64)> {
-    vec![]
+fn generate_notes(fft_data: &[Vec<f64>]) -> Vec<u128> {
+    let mut notes = vec![];
+
+    for time_slice in fft_data {
+        // convolute time_slice of height of X into 88
+        // compute note vector from previous timeslice + new data
+        let note_vec = vec![1_f64; 88];
+
+        let note_bitmap = note_vec
+            .into_iter()
+            .enumerate()
+            .filter(|(_, note)| *note > 0.5)
+            .fold(0_u128, |note_bitmap, (i, _)| note_bitmap | 1 << i);
+
+        notes.push(note_bitmap);
+    }
+
+    notes
 }
 
 /// Convert a provided path string for an audio file into a Path struct.
