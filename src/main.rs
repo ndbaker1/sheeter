@@ -50,14 +50,17 @@ fn main() -> Result<(), Error> {
         wav_filepath.with_extension("png").to_str().unwrap(),
     );
 
-    save_midi(wav_filepath.with_extension("midi").to_str().unwrap());
+    save_midi(
+        &fft_map,
+        wav_filepath.with_extension("midi").to_str().unwrap(),
+    );
 
     Ok(())
 }
 
 /// Optionally perform an element-wise transformation on the fft data
-/// in oder to modify the strength of particular frequencies.
-/// Next, normalize the data with the highest value in the map.
+/// in order to modify the strength of particular frequencies.
+/// Next, normalize the data based on the max of the data points in the map.
 fn amplify_and_normalize(fft_map: &mut [Vec<f64>], optional_amplifier: Option<fn(&f64) -> f64>) {
     if let Some(amplifier) = optional_amplifier {
         fft_map
@@ -66,7 +69,7 @@ fn amplify_and_normalize(fft_map: &mut [Vec<f64>], optional_amplifier: Option<fn
             .for_each(|val| *val = amplifier(val));
     }
 
-    let signal_max = fft_map.iter().flatten().fold(f64::NAN, |acc, i| i.max(acc));
+    let signal_max = fft_map.iter().flatten().fold(f64::NAN, |p, i| i.max(p));
 
     fft_map
         .iter_mut()
@@ -163,7 +166,8 @@ fn fft_transform(
         // reading the data for a single channel at a time and performing FFT on it
         for channel in 0..header.channel_count as usize {
             let buffer = &mut pcm_samples[channel
-                + usize::saturating_sub(chunk_start, read_chunk_size / 2)
+                + chunk_start
+                    .saturating_add(read_chunk_size / 2)
                     .max(0)
                     .min(last_frame)..]
                 .iter()
@@ -234,41 +238,51 @@ fn save_image(fft_map: &[Vec<f64>], width: usize, height: usize, image_file: &st
     .expect("failed to parse raster to image.");
 }
 
-// TODO
-fn save_midi(file_path: &str) {
-    let midi_data = vec![vec![
-        TrackEvent {
-            delta: 0.into(),
+/// Save the fft_data into a MIDI format
+///
+/// ## Operations
+/// 1. interpret FFT data as notes with start & stop times
+/// 2. sorts objects by time to be used as delta in MIDI standard
+/// 3. parses list into TrackEvents
+fn save_midi(fft_data: &[Vec<f64>], file_path: &str) {
+    let mut midi_data: Vec<TrackEvent> = generate_notes(fft_data)
+        .into_iter()
+        .flat_map(|(note, start, end)| [(note, start, 0), (note, end, 1)])
+        .map(|(note, time, order)| TrackEvent {
+            delta: (time as u32).into(),
             kind: TrackEventKind::Midi {
                 channel: 0.into(),
                 message: midly::MidiMessage::NoteOn {
-                    vel: 200.into(),
-                    key: 60.into(),
+                    vel: match order {
+                        0 => 90.into(),
+                        1 => 0.into(),
+                        _ => 0.into(),
+                    },
+                    key: note.into(),
                 },
             },
-        },
-        TrackEvent {
-            delta: 5000.into(),
-            kind: TrackEventKind::Midi {
-                channel: 0.into(),
-                message: midly::MidiMessage::NoteOn {
-                    vel: 0.into(),
-                    key: 60.into(),
-                },
-            },
-        },
-        TrackEvent {
-            delta: 0.into(),
-            kind: TrackEventKind::Meta(midly::MetaMessage::EndOfTrack),
-        },
-    ]];
+        })
+        .collect();
+
+    // append the end of track message
+    midi_data.push(TrackEvent {
+        delta: 0.into(),
+        kind: TrackEventKind::Meta(midly::MetaMessage::EndOfTrack),
+    });
 
     midly::write_std(
         &Header::new(Format::SingleTrack, Timing::Metrical(100.into())),
-        &midi_data,
+        &[midi_data],
         &mut File::create(file_path).unwrap(),
     )
     .expect("failed to write midi.");
+}
+
+/// Returns a set of notes that contain the start and end time
+///
+/// maybe this is a neural network
+fn generate_notes(fft_data: &[Vec<f64>]) -> Vec<(u8, f64, f64)> {
+    vec![]
 }
 
 /// Convert a provided path string for an audio file into a Path struct.

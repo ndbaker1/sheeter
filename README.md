@@ -10,7 +10,7 @@ Process WAV format audio files into sheet music.
 
 *several steps above can sought to be parallelized*
 
-This is based on a [previous project of mine](https://github.com/ndbaker1/WAV-analyzer), extended to higher dimensionality.
+This is based on a [previous project of mine](https://github.com/ndbaker1/WAV-analyzer), extended to higher dimensionality and based on other projects/papers I have read in the subject before.
 
 [![gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/from-referrer)
 
@@ -20,6 +20,8 @@ This is based on a [previous project of mine](https://github.com/ndbaker1/WAV-an
 - [ ] convert fft data into MIDI format
 - [ ] test MIDI to sheet music converter
 
-## References
+## Resources
 - https://github.com/philjonas/c-midi-writer
 - https://github.com/LUMII-Syslab/RSE
+- https://github.com/9552nZ/SmartSheetMusic
+- https://colinraffel.com/projects/lmd/#get
