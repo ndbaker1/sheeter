@@ -16,7 +16,7 @@ struct ProgramArgs {
     /// based on the sampling_rate of the file
     #[clap(long, short, default_value_t = 0.1)]
     time_step: f64,
-    /// amount of overlap to inlude with other chunk frames.
+    /// amount of overlap to include with other chunk frames.
     /// If no value is provided then it will default to be equal to the timestep
     #[clap(long, short)]
     chunk_step: Option<f64>,
