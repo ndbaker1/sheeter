@@ -1,6 +1,8 @@
 # Sheeter
 🎵 Music Transcriber
 
+> Work has halted since solutions like Spotify's [Basic Pitch](https://github.com/spotify/basic-pitch) have already addressed this same topic
+
 Process WAV format audio files into sheet music.
 1. Send PCM (Pulse Code Modulation) data through a Fourier Transform to get frequency domain
 2. Iterate through time slices in order to get a matrix of frequency to strength. `F: X * Y -> Z`
